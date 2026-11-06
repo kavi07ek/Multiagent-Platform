@@ -2,12 +2,14 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import AgentPipeline from "@/components/AgentPipeline";
 import LogStream from "@/components/LogStream";
 import FileExplorer from "@/components/FileExplorer";
 import DownloadButton from "@/components/DownloadButton";
 import ReviewPanel from "@/components/ReviewPanel";
 import ProfileButton from "@/components/ProfileButton";
+import { saveRunToSupabase, getSupabaseCredentials } from "@/lib/supabase";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
@@ -46,6 +48,14 @@ const INITIAL_PIPELINE: PipelineState = {
 };
 
 export default function Dashboard() {
+  const router = useRouter();
+
+  // Auth gating state
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userEmail, setUserEmail] = useState<string>("user@agentforge.ai");
+  const [isSupabaseDbActive, setIsSupabaseDbActive] = useState(false);
+
   const [spec, setSpec] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -62,6 +72,33 @@ export default function Dashboard() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const toastId = useRef(0);
   const processSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // First get login: Check authentication on mount
+  useEffect(() => {
+    try {
+      const userStr = localStorage.getItem("agentforge_user") || sessionStorage.getItem("agentforge_user");
+      if (!userStr) {
+        // Redirect to login page first
+        router.replace("/login");
+        return;
+      }
+      const parsed = JSON.parse(userStr);
+      if (!parsed?.email && !parsed?.username) {
+        router.replace("/login");
+        return;
+      }
+      setUserEmail(parsed.email || `${parsed.username}@agentforge.ai`);
+      setIsAuthenticated(true);
+    } catch {
+      router.replace("/login");
+    } finally {
+      setIsCheckingAuth(false);
+    }
+
+    // Check Supabase connection
+    const creds = getSupabaseCredentials();
+    setIsSupabaseDbActive(creds.isConfigured);
+  }, [router]);
 
   const addToast = useCallback((type: string, msg: string) => {
     const id = ++toastId.current;
@@ -159,6 +196,14 @@ export default function Dashboard() {
       const newRunId = data.run_id;
       setRunId(newRunId);
 
+      // Save initial run info to Supabase database
+      saveRunToSupabase({
+        id: newRunId,
+        user_email: userEmail,
+        specification: spec,
+        status: "running",
+      });
+
       // Connect SSE stream
       if (eventSourceRef.current) eventSourceRef.current.close();
 
@@ -181,6 +226,14 @@ export default function Dashboard() {
             reviewer: prev.reviewer === "active" ? "idle" : prev.reviewer,
           }));
           addToast("info", "⏹ Pipeline execution was cancelled.");
+
+          // Update Supabase database record
+          saveRunToSupabase({
+            id: newRunId,
+            user_email: userEmail,
+            specification: spec,
+            status: "cancelled",
+          });
         }
 
         if (entry.type === "DONE") {
@@ -195,8 +248,18 @@ export default function Dashboard() {
           setRunStatus(entry.status === "completed" ? "completed" : "failed");
           setIsRunning(false);
           es.close();
+
           // Fetch final files
           fetchFiles(newRunId);
+
+          // Update Supabase database record
+          saveRunToSupabase({
+            id: newRunId,
+            user_email: userEmail,
+            specification: spec,
+            status: entry.status === "completed" ? "completed" : "failed",
+          });
+
           if (entry.status === "completed") {
             addToast("success", "✅ Pipeline completed successfully!");
           } else {
@@ -228,7 +291,7 @@ export default function Dashboard() {
       const msg = err instanceof Error ? err.message : String(err);
       addToast("error", `Failed to start pipeline: ${msg}`);
     }
-  }, [spec, isRunning, updatePipelineFromLog, addToast]);
+  }, [spec, isRunning, userEmail, updatePipelineFromLog, addToast]);
 
   const fetchFiles = useCallback(async (rid: string) => {
     try {
@@ -274,6 +337,51 @@ export default function Dashboard() {
 
   const isProcessVisible = hasStarted || runStatus !== "idle" || logs.length > 0;
 
+  // Gating view: If verifying authentication, don't show the dashboard yet
+  if (isCheckingAuth || !isAuthenticated) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "var(--bg-base)",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        <div
+          className="glass-card"
+          style={{
+            padding: "2.5rem 3rem",
+            textAlign: "center",
+            maxWidth: "420px",
+            width: "90%",
+            border: "1px solid var(--border-accent)",
+            boxShadow: "var(--shadow-glow-blue)",
+          }}
+        >
+          <div
+            className="spinner"
+            style={{
+              margin: "0 auto 1.5rem",
+              width: "36px",
+              height: "36px",
+              borderTopColor: "var(--accent-blue)",
+            }}
+          />
+          <h2 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "0.5rem" }}>
+            Authenticating Session
+          </h2>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+            Please login first to enter the AgentForge platform...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {/* Header */}
@@ -283,13 +391,31 @@ export default function Dashboard() {
           <span className="logo-text">AgentForge</span>
         </div>
         <span className="header-badge">Multi-Agent Platform v1.0</span>
+
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <span
+            style={{
+              fontSize: "0.72rem",
+              fontWeight: 600,
+              color: isSupabaseDbActive ? "var(--accent-green)" : "var(--accent-cyan)",
+              background: isSupabaseDbActive ? "rgba(104, 211, 145, 0.08)" : "rgba(118, 228, 247, 0.08)",
+              border: `1px solid ${isSupabaseDbActive ? "rgba(104, 211, 145, 0.25)" : "rgba(118, 228, 247, 0.25)"}`,
+              padding: "3px 10px",
+              borderRadius: "12px",
+            }}
+            title={isSupabaseDbActive ? "Connected to Supabase" : "Supabase configured"}
+          >
+            {isSupabaseDbActive ? "🗄️ Supabase Connected" : "🗄️ Supabase DB"}
+          </span>
+
           <Link href="/login" className="login-header-btn">
-            <span>🔑 Login</span>
+            <span>Switch Account</span>
           </Link>
+
           {runStatus === "completed" && runId && (
             <DownloadButton runId={runId} backendUrl={BACKEND_URL} fileCount={Object.keys(files).length} />
           )}
+
           {runStatus !== "idle" && (
             <span
               className="header-badge"
@@ -313,6 +439,7 @@ export default function Dashboard() {
                 : "❌ FAILED"}
             </span>
           )}
+
           {isRunning && (
             <button
               id="cancel-header-btn"
@@ -325,13 +452,14 @@ export default function Dashboard() {
               {isCancelling ? "Cancelling…" : "⏹ Cancel"}
             </button>
           )}
+
           <ProfileButton />
         </div>
       </header>
 
       {/* Hero */}
       <div className="hero">
-        <div className="hero-eyebrow">Powered by LangGraph + Gemini 3.8 Flash</div>
+        <div className="hero-eyebrow">Powered by LangGraph + Gemini 3.8 Flash + Supabase</div>
         <h1>Autonomous Software<br />Engineering Platform</h1>
         <p className="hero-desc">
           Describe what you want to build. Our 5-agent AI pipeline will architect,

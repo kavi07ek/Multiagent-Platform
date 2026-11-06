@@ -146,7 +146,11 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
 
           {/* Quick Stats & System Status */}
           <div className="profile-section">
-            <div className="profile-section-title">System & AI Engine</div>
+            <div className="profile-section-title">System & Database</div>
+            <div className="profile-stat-item">
+              <span className="profile-stat-label">Database</span>
+              <span className="profile-stat-badge">Supabase DB</span>
+            </div>
             <div className="profile-stat-item">
               <span className="profile-stat-label">Model Pipeline</span>
               <span className="profile-stat-badge">Gemini 3.8 Flash</span>

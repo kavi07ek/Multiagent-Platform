@@ -25,14 +25,11 @@ develop-eggs/
 dist/
 downloads/
 eggs/
+# Python build artifacts
+# (Use specific patterns so frontend/lib is not ignored)
 .eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
+!frontend/lib/
 .installed.cfg
 *.egg
 
