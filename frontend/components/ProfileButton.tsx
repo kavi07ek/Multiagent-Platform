@@ -1,28 +1,60 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 interface ProfileButtonProps {
   onApiKeyChange?: (key: string) => void;
 }
 
+interface UserData {
+  username: string;
+  email: string;
+  role: string;
+}
+
 export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
-  const [username] = useState("kavi07ek");
-  const [email] = useState("sridharelankavi@gmail.com");
-  const [role] = useState("Autonomous Platform Lead");
+  const [user, setUser] = useState<UserData | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Load saved key from localStorage if present
+  // Load saved user and API key from storage
   useEffect(() => {
-    const saved = localStorage.getItem("agentforge_gemini_key");
-    if (saved) {
-      setApiKey(saved);
-      if (onApiKeyChange) onApiKeyChange(saved);
+    try {
+      const stored = localStorage.getItem("agentforge_user") || sessionStorage.getItem("agentforge_user");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setUser({
+          username: parsed.username || "kavi07ek",
+          email: parsed.email || "sridharelankavi@gmail.com",
+          role: parsed.role || "Autonomous Platform Lead",
+        });
+      } else {
+        // Default demo session for immediate readiness
+        setUser({
+          username: "kavi07ek",
+          email: "sridharelankavi@gmail.com",
+          role: "Autonomous Platform Lead",
+        });
+      }
+    } catch {
+      setUser({
+        username: "kavi07ek",
+        email: "sridharelankavi@gmail.com",
+        role: "Autonomous Platform Lead",
+      });
+    }
+
+    const savedKey = localStorage.getItem("agentforge_gemini_key");
+    if (savedKey) {
+      setApiKey(savedKey);
+      if (onApiKeyChange) onApiKeyChange(savedKey);
     }
   }, [onApiKeyChange]);
 
@@ -57,6 +89,28 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
     setTimeout(() => setSavedSuccess(false), 2500);
   };
 
+  const handleSignOut = () => {
+    localStorage.removeItem("agentforge_user");
+    sessionStorage.removeItem("agentforge_user");
+    setUser(null);
+    setIsOpen(false);
+    router.push("/login");
+  };
+
+  const getInitials = (name: string) => {
+    if (!name) return "AF";
+    const parts = name.split(/[\s._-]+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  };
+
+  const username = user?.username || "Guest";
+  const email = user?.email || "guest@agentforge.ai";
+  const role = user?.role || "Visitor";
+  const initials = getInitials(username);
+
   return (
     <div className="profile-container" ref={dropdownRef}>
       <button
@@ -67,7 +121,7 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
         aria-expanded={isOpen}
       >
         <div className="profile-avatar">
-          <span>KE</span>
+          <span>{initials}</span>
           <span className="profile-status-indicator" title="Status: Online & Ready" />
         </div>
         <span className="profile-name">{username}</span>
@@ -79,7 +133,7 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
           {/* User Details */}
           <div className="profile-header">
             <div className="profile-avatar-large">
-              <span>KE</span>
+              <span>{initials}</span>
             </div>
             <div className="profile-meta">
               <div className="profile-user-name">{username}</div>
@@ -148,6 +202,11 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
 
           {/* Links & Quick Actions */}
           <div className="profile-actions">
+            <Link href="/login" className="profile-action-link" onClick={() => setIsOpen(false)}>
+              <span>🔑</span>
+              <span>Login / Switch Account</span>
+              <span style={{ marginLeft: "auto", fontSize: "0.7rem", opacity: 0.7 }}>→</span>
+            </Link>
             <a
               href="https://github.com/kavi07ek/Multiagent-Platform"
               target="_blank"
@@ -168,10 +227,18 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
               <span>🔄</span>
               <span>Reset Dashboard Session</span>
             </button>
+            <button
+              type="button"
+              className="profile-action-btn"
+              onClick={handleSignOut}
+              style={{ color: "var(--accent-red)" }}
+            >
+              <span>🚪</span>
+              <span>Sign Out</span>
+            </button>
           </div>
         </div>
       )}
     </div>
   );
 }
-

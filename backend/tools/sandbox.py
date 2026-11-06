@@ -117,16 +117,16 @@ async def run_tests_in_sandbox(workspace_dir: str) -> dict:
             pass  # Skip if requirements install hangs; tests may still pass
 
     # Run pytest with minimal output, stop at first failure for speed
+    # Only use flags always available — no pytest-cov, no pytest-timeout needed
     cmd = [
         str(python_exe), "-m", "pytest",
         str(tests_dir),
         "--tb=short",
         "--no-header",
         "-q",
-        "-x",             # stop at first failure — no point running all tests if one breaks
-        "--timeout=8",    # per-test timeout (needs pytest-timeout, ignored if absent)
-        "-p", "no:warnings",   # suppress warnings output — faster
-        "--no-cov",       # never run coverage (slow) even if pytest-cov is installed
+        "-x",                      # stop at first failure — faster feedback
+        "-p", "no:warnings",       # suppress warnings — faster output
+        "-p", "no:cacheprovider",  # skip .pytest_cache writes
     ]
 
     try:

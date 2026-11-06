@@ -24,14 +24,10 @@ async def qa_agent_node(state: AgentState) -> dict:
     await _log(log, "AGENT_START", f"🧪 Generating test suite for {len(generated_files)} files...")
 
     # Build source files summary for the prompt (truncate for token limits)
-    source_files_str = _format_source_files(generated_files, max_chars_per_file=600)
+    source_files_str = _format_source_files(generated_files, max_chars_per_file=800)
 
     prompt = QA_AGENT_PROMPT.format(
         source_files=source_files_str,
-        architecture=json.dumps(
-            {k: v for k, v in architecture.items() if k != "file_plan"},
-            indent=2
-        ),
     )
 
     try:

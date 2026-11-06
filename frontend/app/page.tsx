@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import Link from "next/link";
 import AgentPipeline from "@/components/AgentPipeline";
 import LogStream from "@/components/LogStream";
 import FileExplorer from "@/components/FileExplorer";
@@ -55,9 +56,12 @@ export default function Dashboard() {
   const [reviewResult, setReviewResult] = useState<Record<string, unknown> | null>(null);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "completed" | "failed" | "cancelled">("idle");
   const [toasts, setToasts] = useState<{ id: number; type: string; msg: string }[]>([]);
+  // Process is only visible once the user clicks "Run Pipeline"
+  const [hasStarted, setHasStarted] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const toastId = useRef(0);
+  const processSectionRef = useRef<HTMLDivElement | null>(null);
 
   const addToast = useCallback((type: string, msg: string) => {
     const id = ++toastId.current;
@@ -125,7 +129,8 @@ export default function Dashboard() {
   const startRun = useCallback(async () => {
     if (!spec.trim() || isRunning) return;
 
-    // Reset state
+    // Reveal process section immediately on click
+    setHasStarted(true);
     setLogs([]);
     setFiles({});
     setReviewResult(null);
@@ -133,6 +138,11 @@ export default function Dashboard() {
     setRunStatus("running");
     setIsRunning(true);
     setIsCancelling(false);
+
+    // Smooth scroll down to process area
+    setTimeout(() => {
+      processSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
 
     try {
       const response = await fetch(`${BACKEND_URL}/api/run`, {
@@ -245,12 +255,24 @@ export default function Dashboard() {
   // Cleanup on unmount
   useEffect(() => () => eventSourceRef.current?.close(), []);
 
+  const resetToHome = () => {
+    if (isRunning) return;
+    setHasStarted(false);
+    setRunStatus("idle");
+    setLogs([]);
+    setFiles({});
+    setReviewResult(null);
+    setPipeline(INITIAL_PIPELINE);
+  };
+
   const progressPercent = (() => {
     const steps = [pipeline.pm, pipeline.architect, pipeline.developer, pipeline.qa, pipeline.reviewer];
     const done = steps.filter((s) => s === "done").length;
     const active = steps.some((s) => s === "active") ? 0.5 : 0;
     return Math.round(((done + active) / 5) * 100);
   })();
+
+  const isProcessVisible = hasStarted || runStatus !== "idle" || logs.length > 0;
 
   return (
     <>
@@ -262,6 +284,9 @@ export default function Dashboard() {
         </div>
         <span className="header-badge">Multi-Agent Platform v1.0</span>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <Link href="/login" className="login-header-btn">
+            <span>🔑 Login</span>
+          </Link>
           {runStatus === "completed" && runId && (
             <DownloadButton runId={runId} backendUrl={BACKEND_URL} fileCount={Object.keys(files).length} />
           )}
@@ -314,7 +339,7 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Preparing the program banner & Progress bar */}
+      {/* Preparing the program banner & Progress bar (only when running) */}
       {runStatus === "running" && (
         <>
           <div className="preparing-banner">
@@ -341,9 +366,9 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* Main grid */}
+      {/* Main Grid */}
       <div className="main-grid">
-        {/* Spec Input — full width */}
+        {/* Spec Input — Prompt box always present on the home page */}
         <div className="glass-card spec-panel">
           <div className="card-header">
             <div className="card-title">
@@ -418,69 +443,149 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Agent Pipeline */}
-        <div className="glass-card" style={{ gridRow: "span 1" }}>
-          <div className="card-header">
-            <div className="card-title">
-              <span className="card-title-icon">🤖</span>
-              Agent Pipeline
-            </div>
-            {pipeline.reviewIteration > 0 && (
-              <span className="loop-badge">🔄 Review loop #{pipeline.reviewIteration}</span>
-            )}
-          </div>
-          <div className="pipeline-body">
-            <AgentPipeline pipeline={pipeline} />
-          </div>
-        </div>
-
-        {/* Log Stream */}
-        <div className="glass-card log-panel">
-          <div className="card-header">
-            <div className="card-title">
-              <span className="card-title-icon">📡</span>
-              Live Agent Logs
-            </div>
-            <span className={`status-dot ${isRunning ? "streaming" : runStatus === "completed" ? "done" : runStatus === "failed" ? "error" : ""}`}>
-              {isRunning ? "streaming" : runStatus}
-            </span>
-          </div>
-          <LogStream logs={logs} isStreaming={isRunning} />
-        </div>
-
-        {/* File Explorer */}
-        <div className="glass-card explorer-panel">
-          <div className="card-header">
-            <div className="card-title">
-              <span className="card-title-icon">📁</span>
-              Generated Files
-            </div>
-            {Object.keys(files).length > 0 && (
-              <span style={{ fontSize: "0.72rem", color: "var(--accent-green)" }}>
-                {Object.keys(files).length} files
-              </span>
-            )}
-          </div>
-          <FileExplorer files={files} />
-        </div>
-
-        {/* Review Panel — shown when review data available */}
-        {reviewResult && (
-          <div className="glass-card review-panel">
-            <div className="card-header">
-              <div className="card-title">
-                <span className="card-title-icon">🔍</span>
-                Code Review Report
+        {/* Workflow Overview Card — Shown on Home Page before clicking Run Pipeline */}
+        {!isProcessVisible && (
+          <div className="workflow-preview">
+            <div className="workflow-preview-header">
+              <div className="workflow-preview-title">
+                <span>🤖</span>
+                <span>Autonomous 5-Agent Execution Workflow</span>
               </div>
-              <span style={{
-                fontSize: "0.75rem",
-                fontWeight: 700,
-                color: reviewResult.status === "PASS" ? "var(--accent-green)" : "var(--accent-red)"
-              }}>
-                {reviewResult.status === "PASS" ? "✅ PASSED" : "❌ FAILED"}
+              <span style={{ fontSize: "0.75rem", color: "var(--accent-blue)" }}>
+                Click &quot;⚡ Run Pipeline&quot; above to start execution
               </span>
             </div>
-            <ReviewPanel review={reviewResult} />
+            <div className="workflow-steps-row">
+              <div className="workflow-step-card">
+                <span className="workflow-step-badge">Stage 1</span>
+                <span className="workflow-step-name">🎯 Product Manager</span>
+                <span className="workflow-step-desc">
+                  Transforms your prompt into structured functional requirements, user stories, and specs.
+                </span>
+              </div>
+              <div className="workflow-step-card">
+                <span className="workflow-step-badge">Stage 2</span>
+                <span className="workflow-step-name">🏗️ System Architect</span>
+                <span className="workflow-step-desc">
+                  Designs modular architecture, endpoints, database schemas, and dependency file plan.
+                </span>
+              </div>
+              <div className="workflow-step-card">
+                <span className="workflow-step-badge">Stage 3</span>
+                <span className="workflow-step-name">💻 Senior Developer</span>
+                <span className="workflow-step-desc">
+                  Generates clean, production-ready code with parallel async batching for speed.
+                </span>
+              </div>
+              <div className="workflow-step-card">
+                <span className="workflow-step-badge">Stage 4</span>
+                <span className="workflow-step-name">🧪 QA Engineer</span>
+                <span className="workflow-step-desc">
+                  Writes full pytest test suites and runs them live inside the isolated sandbox.
+                </span>
+              </div>
+              <div className="workflow-step-card">
+                <span className="workflow-step-badge">Stage 5</span>
+                <span className="workflow-step-name">🔍 Code Reviewer</span>
+                <span className="workflow-step-desc">
+                  Performs staff-level code review for quality, security vulnerabilities, and score.
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PROCESS AREA — ONLY VISIBLE WHEN USER CLICKS RUN PIPELINE */}
+        {isProcessVisible && (
+          <div className="process-section" ref={processSectionRef}>
+            {/* Process Status Header */}
+            <div className="process-status-header">
+              <div className="process-status-title">
+                <span>⚡ Active Pipeline Process</span>
+                {runId && (
+                  <span style={{ fontFamily: "monospace", fontSize: "0.75rem", opacity: 0.8 }}>
+                    ID: {runId.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+              {!isRunning && (
+                <button type="button" className="btn-reset-view" onClick={resetToHome}>
+                  🔄 Reset / New Specification
+                </button>
+              )}
+            </div>
+
+            {/* Agent Pipeline */}
+            <div className="glass-card" style={{ gridRow: "span 1" }}>
+              <div className="card-header">
+                <div className="card-title">
+                  <span className="card-title-icon">🤖</span>
+                  Agent Pipeline
+                </div>
+                {pipeline.reviewIteration > 0 && (
+                  <span className="loop-badge">🔄 Review loop #{pipeline.reviewIteration}</span>
+                )}
+              </div>
+              <div className="pipeline-body">
+                <AgentPipeline pipeline={pipeline} />
+              </div>
+            </div>
+
+            {/* Log Stream */}
+            <div className="glass-card log-panel">
+              <div className="card-header">
+                <div className="card-title">
+                  <span className="card-title-icon">📡</span>
+                  Live Agent Logs
+                </div>
+                <span
+                  className={`status-dot ${
+                    isRunning ? "streaming" : runStatus === "completed" ? "done" : runStatus === "failed" ? "error" : ""
+                  }`}
+                >
+                  {isRunning ? "streaming" : runStatus}
+                </span>
+              </div>
+              <LogStream logs={logs} isStreaming={isRunning} />
+            </div>
+
+            {/* File Explorer */}
+            <div className="glass-card explorer-panel">
+              <div className="card-header">
+                <div className="card-title">
+                  <span className="card-title-icon">📁</span>
+                  Generated Files
+                </div>
+                {Object.keys(files).length > 0 && (
+                  <span style={{ fontSize: "0.72rem", color: "var(--accent-green)" }}>
+                    {Object.keys(files).length} files
+                  </span>
+                )}
+              </div>
+              <FileExplorer files={files} />
+            </div>
+
+            {/* Review Panel — shown when review data available */}
+            {reviewResult && (
+              <div className="glass-card review-panel">
+                <div className="card-header">
+                  <div className="card-title">
+                    <span className="card-title-icon">🔍</span>
+                    Code Review Report
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: reviewResult.status === "PASS" ? "var(--accent-green)" : "var(--accent-red)",
+                    }}
+                  >
+                    {reviewResult.status === "PASS" ? "✅ PASSED" : "❌ FAILED"}
+                  </span>
+                </div>
+                <ReviewPanel review={reviewResult} />
+              </div>
+            )}
           </div>
         )}
       </div>

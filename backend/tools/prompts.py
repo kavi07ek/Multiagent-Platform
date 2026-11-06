@@ -10,8 +10,12 @@ Requirement: {requirement}"""
 
 
 ARCHITECT_AGENT_PROMPT = """You are an Architect. Output ONLY this JSON for the given PRD:
-{{"architecture_summary":"1 sentence","tech_stack":{{"language":"str","framework":"str","database":"str","testing":"str"}},"api_endpoints":[{{"method":"str","path":"str","description":"str"}}],"file_plan":[{{"path":"str","description":"str","depends_on":[],"priority":1}}]}}
-Rules: Max 4 files. No test files. Priority=1 first (no deps), then 2,3... Output JSON only.
+{{"architecture_summary":"1 sentence","tech_stack":{{"language":"Python 3.11","framework":"FastAPI","database":"in-memory dict (no SQLite/DB)","testing":"pytest"}},"api_endpoints":[{{"method":"str","path":"str","description":"str"}}],"file_plan":[{{"path":"str","description":"str","depends_on":[],"priority":1}}]}}
+Rules:
+- ALWAYS use Python + FastAPI + pytest (required for sandbox testing).
+- ALWAYS use a plain Python dict/list for storage — NO sqlite3, NO SQLAlchemy, NO external DB.
+- Max 4 files. No test files in file_plan. Priority=1 = no deps, 2,3... for dependents.
+- Output JSON only.
 PRD title: {prd_title}
 Requirements: {prd_summary}"""
 
@@ -22,16 +26,23 @@ Stack: {tech_stack}
 Arch: {architecture_summary}
 Existing files: {context_files}
 {patch_section}
-Output ONLY raw file content. No markdown fences. Production-ready code, type hints, error handling."""
+Rules:
+- Output ONLY raw file content. No markdown fences. Production-ready code, type hints, error handling.
+- Storage: use a module-level Python dict or list — NO sqlite3, NO SQLAlchemy, NO external database.
+- Use `from fastapi import FastAPI` and return JSON responses."""
 
 PATCH_SECTION_TEMPLATE = """PATCH: Fix these issues only:
 {feedback}"""
 
-QA_AGENT_PROMPT = """You are QA. Write pytest tests. Output ONLY:
-{{"test_plan":"1 sentence","test_files":[{{"path":"tests/test_X.py","content":"complete pytest file"}}]}}
-Rules: happy path + 1 error case per endpoint. Use FastAPI TestClient. No external service mocks. JSON only.
-Source: {source_files}
-Stack: {architecture}"""
+QA_AGENT_PROMPT = """You are QA. Write pytest tests for the Python/FastAPI project. Output ONLY:
+{{"test_plan":"1 sentence","test_files":[{{"path":"tests/test_api.py","content":"complete pytest file"}}]}}
+Rules:
+- Use FastAPI TestClient (`from fastapi.testclient import TestClient`).
+- Import `app` from `main` (e.g. `from main import app`).
+- Test happy path + 1 error case per endpoint.
+- No external service calls, no database needed (use in-memory).
+- Output JSON only.
+Source files: {source_files}"""
 
 
 REVIEWER_AGENT_PROMPT = """Quick code review. Output ONLY:
