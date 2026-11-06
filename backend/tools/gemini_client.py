@@ -21,14 +21,15 @@ from google import genai
 from google.genai import types
 
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-# Fast fallback chain — ordered by availability / speed
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+# Fast fallback chain — only models confirmed available via v1beta API
 FALLBACK_MODELS = list(dict.fromkeys([
     DEFAULT_MODEL,
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
 ]))
 _client: genai.Client | None = None
 
