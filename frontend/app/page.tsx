@@ -11,7 +11,13 @@ import ReviewPanel from "@/components/ReviewPanel";
 import ProfileButton from "@/components/ProfileButton";
 import { saveRunToSupabase, getSupabaseCredentials } from "@/lib/supabase";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+// Dynamic backend URL resolver to allow seamless access from any device on the same Wi-Fi
+function getBackendUrl(): string {
+  if (typeof window !== "undefined" && window.location.hostname) {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+}
 
 export type LogEntry = {
   type: string;
@@ -146,13 +152,14 @@ export default function Dashboard() {
 
   const cancelRun = useCallback(async () => {
     if (!runId || !isRunning) return;
+    const backendUrl = getBackendUrl();
     setIsCancelling(true);
     try {
-      const response = await fetch(`${BACKEND_URL}/api/runs/${runId}/cancel`, {
+      const response = await fetch(`${backendUrl}/api/runs/${runId}/cancel`, {
         method: "POST",
       });
       if (!response.ok) {
-        await fetch(`${BACKEND_URL}/api/cancel/${runId}`, { method: "POST" });
+        await fetch(`${backendUrl}/api/cancel/${runId}`, { method: "POST" });
       }
       addToast("info", "⏹ Pipeline cancellation requested...");
     } catch (err: unknown) {
@@ -181,8 +188,10 @@ export default function Dashboard() {
       processSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 100);
 
+    const backendUrl = getBackendUrl();
+
     try {
-      const response = await fetch(`${BACKEND_URL}/api/run`, {
+      const response = await fetch(`${backendUrl}/api/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ specification: spec }),
@@ -207,7 +216,7 @@ export default function Dashboard() {
       // Connect SSE stream
       if (eventSourceRef.current) eventSourceRef.current.close();
 
-      const es = new EventSource(`${BACKEND_URL}/api/stream/${newRunId}`);
+      const es = new EventSource(`${backendUrl}/api/stream/${newRunId}`);
       eventSourceRef.current = es;
 
       es.onmessage = (event) => {
@@ -295,7 +304,8 @@ export default function Dashboard() {
 
   const fetchFiles = useCallback(async (rid: string) => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/files/${rid}`);
+      const backendUrl = getBackendUrl();
+      const response = await fetch(`${backendUrl}/api/files/${rid}`);
       if (response.ok) {
         const data = await response.json();
         setFiles(data.files || {});
@@ -413,7 +423,7 @@ export default function Dashboard() {
           </Link>
 
           {runStatus === "completed" && runId && (
-            <DownloadButton runId={runId} backendUrl={BACKEND_URL} fileCount={Object.keys(files).length} />
+            <DownloadButton runId={runId} backendUrl={getBackendUrl()} fileCount={Object.keys(files).length} />
           )}
 
           {runStatus !== "idle" && (
