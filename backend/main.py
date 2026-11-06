@@ -62,9 +62,10 @@ async def start_run(request: RunRequest):
     }
 
     # Launch the pipeline as a background task
-    asyncio.create_task(
+    task = asyncio.create_task(
         _run_pipeline_task(run_id, request.specification, log_queue, workspace_mgr)
     )
+    runs[run_id]["task"] = task
 
     return RunStatus(run_id=run_id, status="running")
 
@@ -88,6 +89,21 @@ async def _run_pipeline_task(
         runs[run_id]["status"] = "completed"
         runs[run_id]["result"] = result
         runs[run_id]["files"] = result.get("generated_files", {})
+    except asyncio.CancelledError:
+        runs[run_id]["status"] = "cancelled"
+        try:
+            await log_queue.put(
+                {
+                    "type": "CANCELLED",
+                    "agent": "system",
+                    "message": "⏹ Pipeline execution was cancelled by user.",
+                    "timestamp": _now(),
+                }
+            )
+            await log_queue.put({"type": "DONE", "status": "cancelled"})
+        except Exception:
+            pass
+        raise
     except Exception as e:
         runs[run_id]["status"] = "failed"
         await log_queue.put(
@@ -101,6 +117,35 @@ async def _run_pipeline_task(
     finally:
         # Signal SSE stream to close
         await log_queue.put(None)
+
+
+@app.post("/api/runs/{run_id}/cancel")
+@app.post("/api/cancel/{run_id}")
+async def cancel_run(run_id: str):
+    """Cancel an ongoing pipeline run."""
+    if run_id not in runs:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    run = runs[run_id]
+    if run["status"] == "running":
+        task: asyncio.Task | None = run.get("task")
+        if task and not task.done():
+            task.cancel()
+        run["status"] = "cancelled"
+        log_queue: asyncio.Queue = run.get("log_queue")
+        if log_queue:
+            await log_queue.put(
+                {
+                    "type": "CANCELLED",
+                    "agent": "system",
+                    "message": "⏹ Pipeline execution was cancelled by user.",
+                    "timestamp": _now(),
+                }
+            )
+            await log_queue.put({"type": "DONE", "status": "cancelled"})
+            await log_queue.put(None)
+
+    return {"run_id": run_id, "status": run["status"]}
 
 
 @app.get("/api/stream/{run_id}")

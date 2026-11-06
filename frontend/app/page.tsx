@@ -6,6 +6,7 @@ import LogStream from "@/components/LogStream";
 import FileExplorer from "@/components/FileExplorer";
 import DownloadButton from "@/components/DownloadButton";
 import ReviewPanel from "@/components/ReviewPanel";
+import ProfileButton from "@/components/ProfileButton";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
@@ -46,12 +47,13 @@ const INITIAL_PIPELINE: PipelineState = {
 export default function Dashboard() {
   const [spec, setSpec] = useState("");
   const [isRunning, setIsRunning] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [pipeline, setPipeline] = useState<PipelineState>(INITIAL_PIPELINE);
   const [files, setFiles] = useState<Record<string, string>>({});
   const [reviewResult, setReviewResult] = useState<Record<string, unknown> | null>(null);
-  const [runStatus, setRunStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
+  const [runStatus, setRunStatus] = useState<"idle" | "running" | "completed" | "failed" | "cancelled">("idle");
   const [toasts, setToasts] = useState<{ id: number; type: string; msg: string }[]>([]);
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -101,6 +103,25 @@ export default function Dashboard() {
     });
   }, []);
 
+  const cancelRun = useCallback(async () => {
+    if (!runId || !isRunning) return;
+    setIsCancelling(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/runs/${runId}/cancel`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        await fetch(`${BACKEND_URL}/api/cancel/${runId}`, { method: "POST" });
+      }
+      addToast("info", "⏹ Pipeline cancellation requested...");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addToast("error", `Failed to cancel pipeline: ${msg}`);
+    } finally {
+      setIsCancelling(false);
+    }
+  }, [runId, isRunning, addToast]);
+
   const startRun = useCallback(async () => {
     if (!spec.trim() || isRunning) return;
 
@@ -111,6 +132,7 @@ export default function Dashboard() {
     setPipeline(INITIAL_PIPELINE);
     setRunStatus("running");
     setIsRunning(true);
+    setIsCancelling(false);
 
     try {
       const response = await fetch(`${BACKEND_URL}/api/run`, {
@@ -137,7 +159,29 @@ export default function Dashboard() {
         const entry: LogEntry & { status?: string; files?: Record<string, string>; review?: Record<string, unknown> } =
           JSON.parse(event.data);
 
+        if (entry.type === "CANCELLED") {
+          setRunStatus("cancelled");
+          setIsRunning(false);
+          setPipeline((prev) => ({
+            ...prev,
+            pm: prev.pm === "active" ? "idle" : prev.pm,
+            architect: prev.architect === "active" ? "idle" : prev.architect,
+            developer: prev.developer === "active" ? "idle" : prev.developer,
+            qa: prev.qa === "active" ? "idle" : prev.qa,
+            reviewer: prev.reviewer === "active" ? "idle" : prev.reviewer,
+          }));
+          addToast("info", "⏹ Pipeline execution was cancelled.");
+        }
+
         if (entry.type === "DONE") {
+          if (entry.status === "cancelled") {
+            setRunStatus("cancelled");
+            setIsRunning(false);
+            es.close();
+            addToast("info", "⏹ Pipeline cancelled.");
+            return;
+          }
+
           setRunStatus(entry.status === "completed" ? "completed" : "failed");
           setIsRunning(false);
           es.close();
@@ -217,15 +261,46 @@ export default function Dashboard() {
           <span className="logo-text">AgentForge</span>
         </div>
         <span className="header-badge">Multi-Agent Platform v1.0</span>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           {runStatus === "completed" && runId && (
             <DownloadButton runId={runId} backendUrl={BACKEND_URL} fileCount={Object.keys(files).length} />
           )}
           {runStatus !== "idle" && (
-            <span className="header-badge" style={{ color: runStatus === "completed" ? "var(--accent-green)" : runStatus === "failed" ? "var(--accent-red)" : "var(--accent-blue)" }}>
-              {runStatus === "running" ? "⚙ RUNNING" : runStatus === "completed" ? "✅ DONE" : "❌ FAILED"}
+            <span
+              className="header-badge"
+              style={{
+                color:
+                  runStatus === "completed"
+                    ? "var(--accent-green)"
+                    : runStatus === "failed"
+                    ? "var(--accent-red)"
+                    : runStatus === "cancelled"
+                    ? "var(--accent-orange)"
+                    : "var(--accent-blue)",
+              }}
+            >
+              {runStatus === "running"
+                ? "⚙ RUNNING"
+                : runStatus === "completed"
+                ? "✅ DONE"
+                : runStatus === "cancelled"
+                ? "⏹ CANCELLED"
+                : "❌ FAILED"}
             </span>
           )}
+          {isRunning && (
+            <button
+              id="cancel-header-btn"
+              type="button"
+              className="btn-cancel-header"
+              onClick={cancelRun}
+              disabled={isCancelling}
+              title="Cancel the running pipeline"
+            >
+              {isCancelling ? "Cancelling…" : "⏹ Cancel"}
+            </button>
+          )}
+          <ProfileButton />
         </div>
       </header>
 
@@ -239,11 +314,31 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Progress bar */}
+      {/* Preparing the program banner & Progress bar */}
       {runStatus === "running" && (
-        <div className="progress-bar-wrapper" style={{ margin: "0 2rem 1rem" }}>
-          <div className="progress-bar" style={{ width: `${progressPercent}%` }} />
-        </div>
+        <>
+          <div className="preparing-banner">
+            <div className="preparing-left">
+              <span className="spinner" style={{ width: "16px", height: "16px", borderTopColor: "var(--accent-blue)" }} />
+              <span className="preparing-title">
+                Preparing program with AI agents ({progressPercent}% complete)
+              </span>
+            </div>
+            <button
+              id="cancel-banner-btn"
+              type="button"
+              className="btn-cancel-inline"
+              onClick={cancelRun}
+              disabled={isCancelling}
+              title="Cancel preparing the program"
+            >
+              {isCancelling ? "Cancelling…" : "⏹ Cancel Run"}
+            </button>
+          </div>
+          <div className="progress-bar-wrapper" style={{ margin: "0 2rem 1rem" }}>
+            <div className="progress-bar" style={{ width: `${progressPercent}%` }} />
+          </div>
+        </>
       )}
 
       {/* Main grid */}
@@ -283,21 +378,42 @@ export default function Dashboard() {
                   </button>
                 ))}
               </div>
-              <button
-                id="run-pipeline-btn"
-                className="btn-primary"
-                onClick={startRun}
-                disabled={isRunning || spec.trim().length < 10}
-              >
-                {isRunning ? (
-                  <>
-                    <span className="spinner" />
-                    Running Pipeline...
-                  </>
-                ) : (
-                  <>⚡ Run Pipeline</>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                {isRunning && (
+                  <button
+                    id="cancel-pipeline-btn"
+                    type="button"
+                    className="btn-danger"
+                    onClick={cancelRun}
+                    disabled={isCancelling}
+                    title="Cancel preparing the program"
+                  >
+                    {isCancelling ? (
+                      <>
+                        <span className="spinner" style={{ borderTopColor: "var(--accent-red)", width: "14px", height: "14px" }} />
+                        Cancelling…
+                      </>
+                    ) : (
+                      <>⏹ Cancel Pipeline</>
+                    )}
+                  </button>
                 )}
-              </button>
+                <button
+                  id="run-pipeline-btn"
+                  className="btn-primary"
+                  onClick={startRun}
+                  disabled={isRunning || spec.trim().length < 10}
+                >
+                  {isRunning ? (
+                    <>
+                      <span className="spinner" />
+                      Preparing Program...
+                    </>
+                  ) : (
+                    <>⚡ Run Pipeline</>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
