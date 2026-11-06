@@ -2,7 +2,7 @@
 
 > Transform plain-English requirements into production-ready, tested, reviewed code using a 5-agent AI pipeline.
 
-![Stack](https://img.shields.io/badge/LangGraph-0.2+-blue) ![Stack](https://img.shields.io/badge/Gemini-2.0_Flash-orange) ![Stack](https://img.shields.io/badge/FastAPI-0.115+-green) ![Stack](https://img.shields.io/badge/Next.js-14-black)
+![Stack](https://img.shields.io/badge/LangGraph-0.2+-blue) ![Stack](https://img.shields.io/badge/Gemini-3.8_Flash-orange) ![Stack](https://img.shields.io/badge/FastAPI-0.115+-green) ![Stack](https://img.shields.io/badge/Next.js-16-black)
 
 ---
 
@@ -150,10 +150,10 @@ MAX_REVIEW_ITERATIONS = 3  # Max times reviewer sends code back to developer
 In `backend/tools/gemini_client.py`:
 ```python
 # Default model for all agents
-model = "gemini-2.0-flash"
+model = "gemini-3.8-flash"
 
-# For more complex reasoning (Architect/Reviewer):
-model = "gemini-2.0-flash-thinking-exp"
+# Optional environment variable override in backend/.env:
+# GEMINI_MODEL=gemini-3.8-flash
 ```
 
 ### Sandbox Timeout

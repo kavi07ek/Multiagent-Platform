@@ -2,8 +2,10 @@
 Developer Agent Node
 Implements all files from the architecture file plan using Gemini.
 Supports patch mode when review feedback is provided.
+Files with no mutual dependencies are generated concurrently for speed.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -13,9 +15,13 @@ from tools.prompts import DEVELOPER_AGENT_PROMPT, PATCH_SECTION_TEMPLATE
 
 AGENT_NAME = "Developer"
 
+# Max concurrent Gemini calls during file generation
+MAX_CONCURRENT_FILES = 4
+
 
 async def developer_agent_node(state: AgentState) -> dict:
-    """Generate source code files from the architecture plan."""
+    """Generate source code files from the architecture plan — files are batched
+    by dependency priority so independent files are generated in parallel."""
     log = state.get("log_queue")
     workspace_mgr = state.get("workspace_mgr")
     architecture = state["architecture"]
@@ -31,48 +37,65 @@ async def developer_agent_node(state: AgentState) -> dict:
     if is_patch_mode:
         await _log(log, "AGENT_START", f"🔧 Patch mode (iteration {iteration}): Applying review fixes...")
     else:
-        await _log(log, "AGENT_START", f"💻 Implementing {len(file_plan)} files...")
+        await _log(log, "AGENT_START", f"💻 Implementing {len(file_plan)} files in parallel batches...")
 
-    generated_files = dict(existing_files)  # start from existing
+    generated_files = dict(existing_files)
 
-    # Sort by priority
-    sorted_plan = sorted(file_plan, key=lambda f: f.get("priority", 99))
+    # Group files into priority batches (same priority = generate in parallel)
+    priority_buckets: dict[int, list] = {}
+    for f in file_plan:
+        p = f.get("priority", 99)
+        priority_buckets.setdefault(p, []).append(f)
 
-    for i, file_spec in enumerate(sorted_plan):
-        file_path = file_spec["path"]
-        description = file_spec.get("description", "")
+    for priority in sorted(priority_buckets.keys()):
+        batch = priority_buckets[priority]
 
-        await _log(
-            log, "AGENT_LOG",
-            f"  [{i+1}/{len(sorted_plan)}] Writing: {file_path}"
-        )
+        # Semaphore limits concurrent Gemini API calls
+        sem = asyncio.Semaphore(MAX_CONCURRENT_FILES)
 
-        # Build context from already-implemented files
-        context_snippets = []
-        for dep_path in file_spec.get("depends_on", []):
-            if dep_path in generated_files:
-                content = generated_files[dep_path]
-                context_snippets.append(f"### {dep_path}\n```\n{content[:800]}\n```")
-        context_files = "\n".join(context_snippets) if context_snippets else "None yet."
+        async def _generate_one(file_spec, _sem=sem):
+            file_path = file_spec["path"]
+            description = file_spec.get("description", "")
 
-        patch_section = ""
-        if is_patch_mode and patch_feedback:
-            patch_section = PATCH_SECTION_TEMPLATE.format(feedback=patch_feedback)
+            # Build context from already-completed files
+            context_snippets = []
+            for dep_path in file_spec.get("depends_on", []):
+                if dep_path in generated_files:
+                    content = generated_files[dep_path]
+                    context_snippets.append(f"### {dep_path}\n```\n{content[:600]}\n```")
+            context_files = "\n".join(context_snippets) if context_snippets else "None yet."
 
-        prompt = DEVELOPER_AGENT_PROMPT.format(
-            file_path=file_path,
-            file_description=description,
-            architecture_summary=arch_summary,
-            tech_stack=json.dumps(tech_stack),
-            context_files=context_files,
-            patch_section=patch_section,
-        )
+            patch_section = ""
+            if is_patch_mode and patch_feedback:
+                patch_section = PATCH_SECTION_TEMPLATE.format(feedback=patch_feedback)
 
-        try:
-            code_content = await generate_text(prompt)
+            prompt = DEVELOPER_AGENT_PROMPT.format(
+                file_path=file_path,
+                file_description=description,
+                architecture_summary=arch_summary,
+                tech_stack=json.dumps(tech_stack),
+                context_files=context_files,
+                patch_section=patch_section,
+            )
+
+            async with _sem:
+                await _log(log, "AGENT_LOG", f"  ⚙️ Generating: {file_path}")
+                try:
+                    code_content = await generate_text(prompt)
+                    return file_path, code_content, None
+                except Exception as e:
+                    return file_path, None, str(e)
+
+        # Run the batch concurrently
+        results = await asyncio.gather(*[_generate_one(f) for f in batch])
+
+        for file_path, code_content, error in results:
+            if error:
+                await _log(log, "ERROR", f"  ❌ Failed to generate {file_path}: {error}")
+                continue
+
             generated_files[file_path] = code_content
 
-            # Write to workspace
             if workspace_mgr:
                 workspace_mgr.write_file(file_path, code_content)
 
@@ -81,10 +104,6 @@ async def developer_agent_node(state: AgentState) -> dict:
                 f"  ✅ {file_path} ({len(code_content)} chars)",
                 metadata={"path": file_path, "size": len(code_content)}
             )
-        except Exception as e:
-            await _log(log, "ERROR", f"  ❌ Failed to generate {file_path}: {str(e)}")
-            # Continue with other files
-            continue
 
     await _log(
         log, "AGENT_DONE",
@@ -93,7 +112,7 @@ async def developer_agent_node(state: AgentState) -> dict:
 
     return {
         "generated_files": generated_files,
-        "patch_feedback": None,  # Clear feedback after applying
+        "patch_feedback": None,
     }
 
 

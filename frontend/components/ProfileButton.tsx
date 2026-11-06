@@ -95,7 +95,7 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
             <div className="profile-section-title">System & AI Engine</div>
             <div className="profile-stat-item">
               <span className="profile-stat-label">Model Pipeline</span>
-              <span className="profile-stat-badge">Gemini 2.0 Flash</span>
+              <span className="profile-stat-badge">Gemini 3.8 Flash</span>
             </div>
             <div className="profile-stat-item">
               <span className="profile-stat-label">Orchestrator</span>
@@ -174,3 +174,4 @@ export default function ProfileButton({ onApiKeyChange }: ProfileButtonProps) {
     </div>
   );
 }
+

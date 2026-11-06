@@ -15,7 +15,7 @@ from orchestrator.nodes.developer_agent import developer_agent_node
 from orchestrator.nodes.qa_agent import qa_agent_node
 from orchestrator.nodes.reviewer_agent import reviewer_agent_node
 
-MAX_REVIEW_ITERATIONS = 3
+MAX_REVIEW_ITERATIONS = 1  # Reduced from 3 — one review loop is enough for fast runs
 
 
 def should_continue(state: AgentState) -> Literal["developer", "done"]:

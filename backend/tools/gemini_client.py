@@ -1,7 +1,7 @@
 """
 Gemini API Client Wrapper
 Handles model invocation for all agents.
-Supports live Google Gemini 2.0 Flash API as well as an intelligent
+Supports live Google Gemini 3.8 Flash API as well as an intelligent
 built-in demo mode when GEMINI_API_KEY is not yet configured.
 """
 
@@ -14,6 +14,13 @@ from google import genai
 from google.genai import types
 
 
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+FALLBACK_MODELS = list(dict.fromkeys([
+    DEFAULT_MODEL,
+    "gemini-3.5-flash",
+    "gemini-3.7-flash",
+    "gemini-3.1-flash-lite",
+]))
 _client: genai.Client | None = None
 
 
@@ -32,56 +39,92 @@ def get_client() -> genai.Client:
     return _client
 
 
-async def generate_json(prompt: str, model: str = "gemini-2.0-flash") -> dict:
+async def generate_json(prompt: str, model: str = DEFAULT_MODEL) -> dict:
     """
     Call Gemini and parse the JSON response.
-    Falls back to intelligent mock responses if no API key is provided.
+    Includes automatic failover to available Gemini 3.x models if primary experiences
+    temporary capacity spikes (503) or availability changes.
     """
     if not is_live_mode():
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.3)
         return _mock_json_response(prompt)
 
     client = get_client()
 
     config = types.GenerateContentConfig(
-        temperature=0.2,
-        max_output_tokens=8192,
+        temperature=0.1,
+        max_output_tokens=4096,   # JSON responses are compact — no need for 8192
         response_mime_type="application/json",
     )
 
-    response = await client.aio.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=config,
-    )
+    candidate_models = list(dict.fromkeys([model] + FALLBACK_MODELS))
+    last_err: Exception | None = None
 
-    raw = response.text.strip()
-    return _parse_json_response(raw)
+    for m in candidate_models:
+        for attempt in range(2):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=config,
+                )
+                raw = response.text.strip()
+                return _parse_json_response(raw)
+            except Exception as e:
+                last_err = e
+                err_msg = str(e)
+                if any(x in err_msg for x in ["503", "429", "404", "UNAVAILABLE", "NOT_FOUND"]):
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
+
+    if last_err:
+        raise last_err
+
+    return _mock_json_response(prompt)
 
 
-async def generate_text(prompt: str, model: str = "gemini-2.0-flash") -> str:
+async def generate_text(prompt: str, model: str = DEFAULT_MODEL) -> str:
     """
     Call Gemini and return raw text response (for code generation).
-    Falls back to intelligent mock code generation if no API key is provided.
+    Includes automatic failover to available Gemini 3.x models if primary experiences
+    temporary capacity spikes (503) or availability changes.
     """
     if not is_live_mode():
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(0.5)
         return _mock_text_response(prompt)
 
     client = get_client()
 
     config = types.GenerateContentConfig(
-        temperature=0.3,
-        max_output_tokens=8192,
+        temperature=0.2,
+        max_output_tokens=6144,   # Code files rarely exceed 6k tokens
     )
 
-    response = await client.aio.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=config,
-    )
+    candidate_models = list(dict.fromkeys([model] + FALLBACK_MODELS))
+    last_err: Exception | None = None
 
-    return response.text.strip()
+    for m in candidate_models:
+        for attempt in range(2):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=config,
+                )
+                return response.text.strip()
+            except Exception as e:
+                last_err = e
+                err_msg = str(e)
+                if any(x in err_msg for x in ["503", "429", "404", "UNAVAILABLE", "NOT_FOUND"]):
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
+
+    if last_err:
+        raise last_err
+
+    return _mock_text_response(prompt)
 
 
 def _parse_json_response(raw: str) -> dict:

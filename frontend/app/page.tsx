@@ -306,7 +306,7 @@ export default function Dashboard() {
 
       {/* Hero */}
       <div className="hero">
-        <div className="hero-eyebrow">Powered by LangGraph + Gemini 2.0 Flash</div>
+        <div className="hero-eyebrow">Powered by LangGraph + Gemini 3.8 Flash</div>
         <h1>Autonomous Software<br />Engineering Platform</h1>
         <p className="hero-desc">
           Describe what you want to build. Our 5-agent AI pipeline will architect,
