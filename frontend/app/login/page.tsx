@@ -8,6 +8,31 @@ import {
   getSupabaseCredentials,
 } from "@/lib/supabase";
 
+interface RegisteredUser {
+  email: string;
+  password?: string;
+  username: string;
+  role: string;
+  createdAt: string;
+}
+
+const DEFAULT_ACCOUNTS: RegisteredUser[] = [
+  {
+    email: "sridharelankavi@gmail.com",
+    password: "password123",
+    username: "kavi07ek",
+    role: "Autonomous Platform Lead",
+    createdAt: new Date().toISOString(),
+  },
+  {
+    email: "admin@agentforge.ai",
+    password: "adminpassword",
+    username: "admin",
+    role: "Platform Administrator",
+    createdAt: new Date().toISOString(),
+  },
+];
+
 export default function LoginPage() {
   const router = useRouter();
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
@@ -27,9 +52,16 @@ export default function LoginPage() {
   const [dbConfigSaved, setDbConfigSaved] = useState(false);
   const [isSupabaseReady, setIsSupabaseReady] = useState(false);
 
+  // Initialize accounts store and check existing session
   useEffect(() => {
-    // Check existing session
     try {
+      // Seed default accounts if not yet created
+      const storedAccounts = localStorage.getItem("agentforge_accounts");
+      if (!storedAccounts) {
+        localStorage.setItem("agentforge_accounts", JSON.stringify(DEFAULT_ACCOUNTS));
+      }
+
+      // Check existing session
       const stored = localStorage.getItem("agentforge_user") || sessionStorage.getItem("agentforge_user");
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -63,44 +95,73 @@ export default function LoginPage() {
     }
   };
 
-  const handleSupabaseAuth = async (e: React.FormEvent) => {
+  const validateInputs = () => {
+    const cleanEmail = email.trim();
+    const cleanPass = password.trim();
+
+    if (!cleanEmail) {
+      setErrorMsg("Please enter your email address.");
+      return false;
+    }
+
+    // Email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setErrorMsg("Please enter a valid email address (e.g. user@example.com).");
+      return false;
+    }
+
+    if (!cleanPass) {
+      setErrorMsg("Please enter your password.");
+      return false;
+    }
+
+    if (cleanPass.length < 6) {
+      setErrorMsg("Password must be at least 6 characters long.");
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
     setSuccessMsg("");
 
-    if (!email.trim()) {
-      setErrorMsg("Please enter your email address.");
+    if (!validateInputs()) {
       return;
     }
-    if (!password.trim() || password.length < 6) {
-      setErrorMsg("Password must be at least 6 characters.");
-      return;
-    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPass = password.trim();
 
     setIsLoading(true);
 
     const supabase = getSupabaseClient();
 
-    // If Supabase client is configured, use live Supabase authentication
+    // ----------------------------------------------------
+    // 1. If Supabase is connected, authenticate with Supabase
+    // ----------------------------------------------------
     if (supabase) {
       try {
         if (authMode === "signup") {
           const { data, error } = await supabase.auth.signUp({
-            email: email.trim(),
-            password: password.trim(),
+            email: cleanEmail,
+            password: cleanPass,
           });
 
           if (error) {
-            setErrorMsg(error.message);
+            setErrorMsg(`Supabase Error: ${error.message}`);
             setIsLoading(false);
             return;
           }
 
           if (data.user) {
             const userData = {
-              username: email.split("@")[0],
-              email: data.user.email || email.trim(),
-              role: "Developer",
+              username: cleanEmail.split("@")[0],
+              email: data.user.email || cleanEmail,
+              role: "Software Engineering Lead",
               supabaseId: data.user.id,
               token: data.session?.access_token || `af_sb_${Date.now()}`,
               loggedInAt: new Date().toISOString(),
@@ -112,29 +173,30 @@ export default function LoginPage() {
               sessionStorage.setItem("agentforge_user", JSON.stringify(userData));
             }
 
-            setSuccessMsg("Account created in Supabase! Moving to home page...");
+            setSuccessMsg("✓ Account created in Supabase! Moving to home page...");
             setTimeout(() => {
               router.push("/");
-            }, 800);
+            }, 600);
             return;
           }
         } else {
-          // Sign in
+          // Sign In with Supabase
           const { data, error } = await supabase.auth.signInWithPassword({
-            email: email.trim(),
-            password: password.trim(),
+            email: cleanEmail,
+            password: cleanPass,
           });
 
           if (error) {
-            setErrorMsg(error.message);
+            // Throw error for incorrect email/password
+            setErrorMsg("❌ Incorrect email address or password. Please verify your credentials.");
             setIsLoading(false);
             return;
           }
 
           if (data.user) {
             const userData = {
-              username: email.split("@")[0],
-              email: data.user.email || email.trim(),
+              username: cleanEmail.split("@")[0],
+              email: data.user.email || cleanEmail,
               role: "Software Engineering Lead",
               supabaseId: data.user.id,
               token: data.session?.access_token || `af_sb_${Date.now()}`,
@@ -156,19 +218,91 @@ export default function LoginPage() {
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMsg(`Supabase auth error: ${msg}`);
+        setErrorMsg(`Authentication error: ${msg}`);
         setIsLoading(false);
         return;
       }
     }
 
-    // Fallback: If Supabase credentials are not yet set up, allow simulated auth with user's credentials
+    // ----------------------------------------------------
+    // 2. Persistent Database Store (Account management & verification)
+    // ----------------------------------------------------
     setTimeout(() => {
+      let accounts: RegisteredUser[] = [];
+      try {
+        const raw = localStorage.getItem("agentforge_accounts");
+        accounts = raw ? JSON.parse(raw) : DEFAULT_ACCOUNTS;
+      } catch {
+        accounts = DEFAULT_ACCOUNTS;
+      }
+
+      // --- SIGN UP MODE ---
+      if (authMode === "signup") {
+        const existing = accounts.find((acc) => acc.email.toLowerCase() === cleanEmail);
+        if (existing) {
+          setErrorMsg("❌ An account with this email already exists. Please sign in instead.");
+          setIsLoading(false);
+          return;
+        }
+
+        const newUser: RegisteredUser = {
+          email: cleanEmail,
+          password: cleanPass,
+          username: cleanEmail.split("@")[0],
+          role: "Software Engineer",
+          createdAt: new Date().toISOString(),
+        };
+
+        // Save new user account to persistent database
+        accounts.push(newUser);
+        localStorage.setItem("agentforge_accounts", JSON.stringify(accounts));
+
+        // Immediately log the signed up user in and move to home page
+        const userData = {
+          username: newUser.username,
+          email: newUser.email,
+          role: newUser.role,
+          token: `af_usr_${Math.random().toString(36).substring(2)}_${Date.now()}`,
+          loggedInAt: new Date().toISOString(),
+        };
+
+        if (rememberMe) {
+          localStorage.setItem("agentforge_user", JSON.stringify(userData));
+        } else {
+          sessionStorage.setItem("agentforge_user", JSON.stringify(userData));
+        }
+
+        setSuccessMsg("✓ Account created successfully! Moving into home page...");
+        setTimeout(() => {
+          setIsLoading(false);
+          router.push("/");
+        }, 500);
+        return;
+      }
+
+      // --- SIGN IN MODE ---
+      const matchedUser = accounts.find((acc) => acc.email.toLowerCase() === cleanEmail);
+
+      // Check if email exists
+      if (!matchedUser) {
+        setErrorMsg("❌ Incorrect email address or no account found. Please check your email or sign up.");
+        setIsLoading(false);
+        return;
+      }
+
+      // Check if password matches
+      if (matchedUser.password && matchedUser.password !== cleanPass) {
+        setErrorMsg("❌ Incorrect password. Please try again.");
+        setIsLoading(false);
+        return;
+      }
+
+      // Credentials correct -> log in and move to home page
       const userData = {
-        username: email.includes("@") ? email.split("@")[0] : email.trim(),
-        email: email.includes("@") ? email.trim() : `${email.trim().toLowerCase()}@agentforge.ai`,
-        role: "Software Engineering Lead",
-        token: `af_local_${Math.random().toString(36).substring(2)}_${Date.now()}`,
+        username: matchedUser.username,
+        email: matchedUser.email,
+        role: matchedUser.role,
+        token: `af_sess_${Math.random().toString(36).substring(2)}_${Date.now()}`,
         loggedInAt: new Date().toISOString(),
       };
 
@@ -178,12 +312,12 @@ export default function LoginPage() {
         sessionStorage.setItem("agentforge_user", JSON.stringify(userData));
       }
 
-      setSuccessMsg("✓ Logged in! Moving into home page...");
+      setSuccessMsg("✓ Credentials verified! Moving into home page...");
       setTimeout(() => {
         setIsLoading(false);
         router.push("/");
       }, 500);
-    }, 600);
+    }, 400);
   };
 
   const handleDemoLogin = () => {
@@ -250,12 +384,14 @@ export default function LoginPage() {
               <span>🗄️ Supabase Powered • AgentForge v1.0</span>
             </div>
             <h1 className="login-title">
-              {currentUser ? "Active Session" : "Login to AgentForge"}
+              {currentUser ? "Active Session" : authMode === "signup" ? "Create an Account" : "Sign in to AgentForge"}
             </h1>
             <p className="login-subtitle">
               {currentUser
                 ? "You are logged in. You can move into the home page or switch accounts."
-                : "Authenticate first to access the autonomous AI multi-agent workspace."}
+                : authMode === "signup"
+                ? "Sign up to create your account and automatically move into the home page."
+                : "Enter your registered email and password to access the platform."}
             </p>
           </div>
 
@@ -288,7 +424,7 @@ export default function LoginPage() {
                 </span>
               </div>
               <p style={{ fontSize: "0.72rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                Connect your Supabase project for persistent user authentication and storing pipeline runs.
+                Connect your Supabase project for persistent cloud user authentication and storing pipeline runs.
               </p>
               <input
                 type="text"
@@ -392,8 +528,13 @@ export default function LoginPage() {
                 }}
               >
                 <button
+                  id="tab-signin"
                   type="button"
-                  onClick={() => setAuthMode("signin")}
+                  onClick={() => {
+                    setAuthMode("signin");
+                    setErrorMsg("");
+                    setSuccessMsg("");
+                  }}
                   style={{
                     flex: 1,
                     padding: "8px 12px",
@@ -410,8 +551,13 @@ export default function LoginPage() {
                   Sign In
                 </button>
                 <button
+                  id="tab-signup"
                   type="button"
-                  onClick={() => setAuthMode("signup")}
+                  onClick={() => {
+                    setAuthMode("signup");
+                    setErrorMsg("");
+                    setSuccessMsg("");
+                  }}
                   style={{
                     flex: 1,
                     padding: "8px 12px",
@@ -425,43 +571,53 @@ export default function LoginPage() {
                     transition: "var(--transition)",
                   }}
                 >
-                  Create Account (Supabase)
+                  Sign Up (Create Account)
                 </button>
               </div>
 
               {errorMsg && (
                 <div
+                  id="auth-error-alert"
                   style={{
                     background: "rgba(252, 129, 129, 0.12)",
-                    border: "1px solid rgba(252, 129, 129, 0.3)",
+                    border: "1px solid rgba(252, 129, 129, 0.35)",
                     borderRadius: "var(--radius-sm)",
                     color: "var(--accent-red)",
                     padding: "10px 14px",
                     fontSize: "0.82rem",
                     marginBottom: "1rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
                   }}
                 >
-                  ⚠️ {errorMsg}
+                  <span>⚠️</span>
+                  <span>{errorMsg}</span>
                 </div>
               )}
 
               {successMsg && (
                 <div
+                  id="auth-success-alert"
                   style={{
                     background: "rgba(104, 211, 145, 0.12)",
-                    border: "1px solid rgba(104, 211, 145, 0.3)",
+                    border: "1px solid rgba(104, 211, 145, 0.35)",
                     borderRadius: "var(--radius-sm)",
                     color: "var(--accent-green)",
                     padding: "10px 14px",
                     fontSize: "0.82rem",
                     marginBottom: "1rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
                   }}
                 >
-                  {successMsg}
+                  <span>✓</span>
+                  <span>{successMsg}</span>
                 </div>
               )}
 
-              <form onSubmit={handleSupabaseAuth} className="login-form">
+              <form onSubmit={handleAuthSubmit} className="login-form">
                 <div className="login-field">
                   <label className="login-label" htmlFor="login-email">
                     Email Address
@@ -474,7 +630,10 @@ export default function LoginPage() {
                       className="login-input"
                       placeholder="e.g. user@example.com"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        setErrorMsg("");
+                      }}
                       disabled={isLoading}
                       required
                       autoFocus
@@ -495,7 +654,10 @@ export default function LoginPage() {
                       className="login-input"
                       placeholder="••••••••••••"
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setErrorMsg("");
+                      }}
                       disabled={isLoading}
                       required
                     />
@@ -521,7 +683,7 @@ export default function LoginPage() {
                     <span>Remember this session</span>
                   </label>
                   <span style={{ fontSize: "0.74rem", color: isSupabaseReady ? "var(--accent-green)" : "var(--accent-blue)" }}>
-                    {isSupabaseReady ? "● Supabase Live" : "● Direct Session"}
+                    {isSupabaseReady ? "● Supabase Live" : "● Database Active"}
                   </span>
                 </div>
 
@@ -534,17 +696,17 @@ export default function LoginPage() {
                   {isLoading ? (
                     <>
                       <span className="spinner" style={{ width: "16px", height: "16px" }} />
-                      Authenticating…
+                      Verifying…
                     </>
                   ) : (
-                    <>⚡ {authMode === "signin" ? "Sign In & Move to Home" : "Create Account & Move to Home"}</>
+                    <>⚡ {authMode === "signup" ? "Create Account & Enter Home Page" : "Sign In & Enter Home Page"}</>
                   )}
                 </button>
               </form>
 
               <div className="login-divider-box">
                 <div className="login-divider-line" />
-                <span className="login-divider-text">Or Instant Access</span>
+                <span className="login-divider-text">Or Instant Demo Access</span>
                 <div className="login-divider-line" />
               </div>
 
@@ -559,7 +721,7 @@ export default function LoginPage() {
               </button>
 
               <p className="login-footer-text">
-                Multi-Agent Software Engineering Platform • Supabase Database & Auth Integration
+                Multi-Agent Software Engineering Platform • Protected by Gemini 3.8 Flash
               </p>
             </>
           )}

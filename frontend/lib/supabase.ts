@@ -116,3 +116,4 @@ export async function getRunsFromSupabase(userEmail?: string): Promise<PipelineR
     return [];
   }
 }
+
