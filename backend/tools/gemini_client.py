@@ -1,8 +1,15 @@
 """
 Gemini API Client Wrapper
 Handles model invocation for all agents.
-Supports live Google Gemini 3.8 Flash API as well as an intelligent
+Supports live Google Gemini API as well as an intelligent
 built-in demo mode when GEMINI_API_KEY is not yet configured.
+
+Speed optimizations:
+- Singleton client (created once).
+- Minimal max_output_tokens per call type.
+- temperature=0 for JSON (deterministic + fastest).
+- Fast fallback: tries next model immediately on 503/429/404.
+- No unnecessary double-retries on the same model.
 """
 
 import json
@@ -14,12 +21,14 @@ from google import genai
 from google.genai import types
 
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# Fast fallback chain — ordered by availability / speed
 FALLBACK_MODELS = list(dict.fromkeys([
     DEFAULT_MODEL,
-    "gemini-3.5-flash",
-    "gemini-3.7-flash",
-    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
 ]))
 _client: genai.Client | None = None
 
@@ -39,91 +48,85 @@ def get_client() -> genai.Client:
     return _client
 
 
+# --- Shared configs (created once) ---
+_JSON_CONFIG = types.GenerateContentConfig(
+    temperature=0.0,          # Fully deterministic → fastest consistent output
+    max_output_tokens=2048,   # JSON responses are compact; 2048 is plenty
+    response_mime_type="application/json",
+)
+
+_TEXT_CONFIG = types.GenerateContentConfig(
+    temperature=0.1,
+    max_output_tokens=4096,   # Code files rarely exceed ~3k tokens
+)
+
+# Retriable error signatures
+_RETRIABLE = ("503", "429", "404", "UNAVAILABLE", "NOT_FOUND", "RESOURCE_EXHAUSTED")
+
+
 async def generate_json(prompt: str, model: str = DEFAULT_MODEL) -> dict:
     """
     Call Gemini and parse the JSON response.
-    Includes automatic failover to available Gemini 3.x models if primary experiences
-    temporary capacity spikes (503) or availability changes.
+    Tries the fastest working model first; moves to next on capacity errors.
     """
     if not is_live_mode():
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.1)
         return _mock_json_response(prompt)
 
     client = get_client()
-
-    config = types.GenerateContentConfig(
-        temperature=0.1,
-        max_output_tokens=4096,   # JSON responses are compact — no need for 8192
-        response_mime_type="application/json",
-    )
-
     candidate_models = list(dict.fromkeys([model] + FALLBACK_MODELS))
     last_err: Exception | None = None
 
     for m in candidate_models:
-        for attempt in range(2):
-            try:
-                response = await client.aio.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config=config,
-                )
-                raw = response.text.strip()
-                return _parse_json_response(raw)
-            except Exception as e:
-                last_err = e
-                err_msg = str(e)
-                if any(x in err_msg for x in ["503", "429", "404", "UNAVAILABLE", "NOT_FOUND"]):
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                    continue
-                raise
+        try:
+            response = await client.aio.models.generate_content(
+                model=m,
+                contents=prompt,
+                config=_JSON_CONFIG,
+            )
+            return _parse_json_response(response.text.strip())
+        except Exception as e:
+            last_err = e
+            if any(x in str(e) for x in _RETRIABLE):
+                await asyncio.sleep(0.3)
+                continue
+            raise  # Non-retriable (auth, bad request) — stop immediately
 
     if last_err:
         raise last_err
-
     return _mock_json_response(prompt)
 
 
 async def generate_text(prompt: str, model: str = DEFAULT_MODEL) -> str:
     """
     Call Gemini and return raw text response (for code generation).
-    Includes automatic failover to available Gemini 3.x models if primary experiences
-    temporary capacity spikes (503) or availability changes.
+    Tries fastest model first; moves on immediately on capacity errors.
     """
     if not is_live_mode():
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
         return _mock_text_response(prompt)
 
     client = get_client()
-
-    config = types.GenerateContentConfig(
-        temperature=0.2,
-        max_output_tokens=6144,   # Code files rarely exceed 6k tokens
-    )
-
     candidate_models = list(dict.fromkeys([model] + FALLBACK_MODELS))
     last_err: Exception | None = None
 
     for m in candidate_models:
-        for attempt in range(2):
-            try:
-                response = await client.aio.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config=config,
-                )
-                return response.text.strip()
-            except Exception as e:
-                last_err = e
-                err_msg = str(e)
-                if any(x in err_msg for x in ["503", "429", "404", "UNAVAILABLE", "NOT_FOUND"]):
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                    continue
-                raise
+        try:
+            response = await client.aio.models.generate_content(
+                model=m,
+                contents=prompt,
+                config=_TEXT_CONFIG,
+            )
+            return response.text.strip()
+        except Exception as e:
+            last_err = e
+            if any(x in str(e) for x in _RETRIABLE):
+                await asyncio.sleep(0.3)
+                continue
+            raise
 
     if last_err:
         raise last_err
-
     return _mock_text_response(prompt)
 
 
@@ -144,7 +147,7 @@ def _parse_json_response(raw: str) -> dict:
 
 def _mock_json_response(prompt: str) -> dict:
     """Generate realistic responses for demo / testing without an API key."""
-    if "Product Requirement Document" in prompt or "Product Manager" in prompt or "structured PRD" in prompt:
+    if "Product Manager" in prompt or "structured PRD" in prompt:
         return {
             "title": "Autonomous Service Application",
             "overview": "A high-performance production REST API service generated from user specifications.",
@@ -210,7 +213,7 @@ def _mock_json_response(prompt: str) -> dict:
             ]
         }
 
-    if "QA" in prompt or "test suite" in prompt or "test_files" in prompt:
+    if "QA" in prompt or "test_files" in prompt:
         return {
             "test_plan": "Comprehensive unit tests verifying models, database operations, and API endpoints using TestClient.",
             "test_files": [
@@ -243,7 +246,7 @@ def _mock_json_response(prompt: str) -> dict:
             ]
         }
 
-    if "Code Reviewer" in prompt or "overall_score" in prompt:
+    if "Staff Engineer" in prompt or "overall_score" in prompt:
         return {
             "status": "PASS",
             "overall_score": 92,
@@ -257,7 +260,6 @@ def _mock_json_response(prompt: str) -> dict:
                 {
                     "severity": "LOW",
                     "file": "main.py",
-                    "line": 15,
                     "description": "Consider adding CORS middleware configuration if consumed by web frontends.",
                     "fix_suggestion": "Add fastapi.middleware.cors.CORSMiddleware"
                 }
@@ -359,4 +361,3 @@ def _mock_text_response(prompt: str) -> str:
         "def run():\n"
         "    return {'status': 'success'}\n"
     )
-

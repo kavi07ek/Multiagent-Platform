@@ -14,16 +14,36 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from contextlib import asynccontextmanager
+
 from models.schemas import RunRequest, RunStatus
 from orchestrator.graph import build_graph, run_pipeline
 from tools.workspace import WorkspaceManager
+from tools.sandbox import _ensure_shared_venv
 
 load_dotenv()
+
+# --- Compile graph once at startup (not per request) ---
+_GRAPH = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _GRAPH
+    _GRAPH = build_graph()
+    # Pre-warm shared venv so the first pipeline run is fast
+    try:
+        await _ensure_shared_venv()
+    except Exception:
+        pass  # Non-fatal — will be retried on first run
+    yield
+
 
 app = FastAPI(
     title="Multi-Agent Platform API",
     description="Autonomous software engineering pipeline powered by LangGraph + Gemini",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -61,7 +81,7 @@ async def start_run(request: RunRequest):
         "result": None,
     }
 
-    # Launch the pipeline as a background task
+    # Launch the pipeline as a background task (use pre-compiled graph)
     task = asyncio.create_task(
         _run_pipeline_task(run_id, request.specification, log_queue, workspace_mgr)
     )
@@ -78,7 +98,7 @@ async def _run_pipeline_task(
 ):
     """Background task that executes the full LangGraph pipeline."""
     try:
-        graph = build_graph()
+        graph = _GRAPH or build_graph()
         result = await run_pipeline(
             graph=graph,
             specification=specification,

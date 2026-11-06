@@ -14,8 +14,14 @@ import os
 import sys
 from pathlib import Path
 
-SANDBOX_TIMEOUT = 20   # seconds for test execution (down from 30)
-_PIP_INSTALL_TIMEOUT = 60   # pip install timeout
+SANDBOX_TIMEOUT = 15   # seconds for test execution (down from 20)
+_PIP_INSTALL_TIMEOUT = 45   # pip install timeout
+
+# Packages already in the shared venv — skip re-installing these
+_PREINSTALLED = frozenset([
+    "fastapi", "uvicorn", "pydantic", "httpx", "pytest",
+    "pytest-asyncio", "anyio", "starlette",
+])
 
 # Shared venv is stored once alongside workspaces/ to be reused per run
 _SHARED_VENV_DIR: Path | None = None
@@ -91,25 +97,36 @@ async def run_tests_in_sandbox(workspace_dir: str) -> dict:
             "summary": f"Sandbox init failed: {e}",
         }
 
-    # Install any extra project-specific requirements
+    # Install any extra project-specific requirements (skip pre-installed ones)
     req_file = workspace_path / "requirements.txt"
     if req_file.exists():
         try:
-            await asyncio.wait_for(
-                _pip_install(python_exe, ["-r", str(req_file)]),
-                timeout=_PIP_INSTALL_TIMEOUT,
-            )
+            # Read requirements and filter out already-installed packages
+            lines = req_file.read_text().splitlines()
+            extra = [
+                ln.strip() for ln in lines
+                if ln.strip() and not ln.startswith("#")
+                and ln.split(">=")[0].split("==")[0].strip().lower() not in _PREINSTALLED
+            ]
+            if extra:
+                await asyncio.wait_for(
+                    _pip_install(python_exe, extra),
+                    timeout=_PIP_INSTALL_TIMEOUT,
+                )
         except asyncio.TimeoutError:
             pass  # Skip if requirements install hangs; tests may still pass
 
-    # Run pytest with minimal output
+    # Run pytest with minimal output, stop at first failure for speed
     cmd = [
         str(python_exe), "-m", "pytest",
         str(tests_dir),
         "--tb=short",
         "--no-header",
         "-q",
-        "--timeout=10",   # per-test timeout (needs pytest-timeout, ignored if absent)
+        "-x",             # stop at first failure — no point running all tests if one breaks
+        "--timeout=8",    # per-test timeout (needs pytest-timeout, ignored if absent)
+        "-p", "no:warnings",   # suppress warnings output — faster
+        "--no-cov",       # never run coverage (slow) even if pytest-cov is installed
     ]
 
     try:

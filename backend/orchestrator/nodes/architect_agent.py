@@ -20,7 +20,11 @@ async def architect_agent_node(state: AgentState) -> dict:
 
     await _log(log, "AGENT_START", f"🏗️ Designing system architecture for: {prd.get('title', 'project')}...")
 
-    prompt = ARCHITECT_AGENT_PROMPT.format(prd=json.dumps(prd, indent=2))
+    # Send compact PRD summary (no indentation = fewer tokens)
+    prd_title = prd.get("title", "Project")
+    frs = prd.get("functional_requirements", [])
+    prd_summary = "; ".join(f"{r.get('title','')}: {r.get('description','')}" for r in frs[:4])
+    prompt = ARCHITECT_AGENT_PROMPT.format(prd_title=prd_title, prd_summary=prd_summary)
 
     try:
         architecture = await generate_json(prompt)
